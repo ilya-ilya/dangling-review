@@ -17,36 +17,36 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-func ReadAccess(filename string) string {
+func ReadAccess(filename string) (string, error) {
 	ajson, err := os.Open("access.json")
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 	defer ajson.Close()
 
 	data, err := io.ReadAll(ajson)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
 	var result struct{ Token string }
 	err = json.Unmarshal(data, &result)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
-	return result.Token
+	return result.Token, nil
 }
 
-func GetOpen(token string) []int {
+func GetOpen(token string) ([]int, error) {
 	req, err := http.NewRequest(http.MethodGet, "https://git.niisi.ru/api/v4/projects/42/merge_requests?state=opened", nil)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	req.Header.Set("PRIVATE-TOKEN", token)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -55,20 +55,20 @@ func GetOpen(token string) []int {
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	var res []struct{ Iid int }
 	err = json.Unmarshal(bodyBytes, &res)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	var result []int
 	for _, mr := range res {
 		result = append(result, mr.Iid)
 	}
-	return result
+	return result, nil
 }
 
 func KubeConnect() error {
@@ -100,9 +100,16 @@ func KubeConnect() error {
 }
 
 func main() {
-	token := ReadAccess("access.json")
+	token, err := ReadAccess("access.json")
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println(token)
-	danglins := GetOpen(token)
+
+	danglins, err := GetOpen(token)
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println(danglins)
 
 	if err = KubeConnect(); err != nil {
