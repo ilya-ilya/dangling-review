@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
+	"golang.org/x/exp/slices"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -71,7 +74,7 @@ func GetOpen(token string) ([]int, error) {
 	return result, nil
 }
 
-func KubeConnect() error {
+func KubeDanglings(active []int) ([]int, error) {
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -83,20 +86,31 @@ func KubeConnect() error {
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
+	namespaces, err := clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
-	return nil
+	var reviews []int
+	for _, ns := range namespaces.Items {
+		if strings.HasPrefix(ns.Name, "mirera-2-42-review-") {
+			review, err := strconv.Atoi(strings.Split(ns.Name, "-")[4])
+			if err != nil {
+				return nil, err
+			}
+			if !slices.Contains(active, review) {
+				reviews = append(reviews, review)
+			}
+		}
+	}
+	return reviews, nil
 }
 
 func main() {
@@ -106,13 +120,15 @@ func main() {
 	}
 	fmt.Println(token)
 
-	danglins, err := GetOpen(token)
+	openMR, err := GetOpen(token)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(danglins)
+	fmt.Println(openMR)
 
-	if err = KubeConnect(); err != nil {
+	k8s_danglings, err := KubeDanglings(openMR)
+	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println(k8s_danglings)
 }
