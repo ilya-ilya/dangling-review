@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,26 +19,33 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func ReadAccess(filename string) (string, error) {
+func ReadAccess(filename string) (string, string, error) {
 	ajson, err := os.Open("access.json")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer ajson.Close()
 
 	data, err := io.ReadAll(ajson)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	var result struct{ Token string }
+	var result struct {
+		Token string
+		Mongo string
+	}
 	err = json.Unmarshal(data, &result)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return result.Token, nil
+	return result.Token, result.Mongo, nil
 }
 
 func GetOpen(token string) ([]int, error) {
@@ -113,12 +121,40 @@ func KubeDanglings(active []int) ([]int, error) {
 	return reviews, nil
 }
 
+func MongoDanglings(ctx context.Context, uri string, active []int) ([]int, error) {
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		err = errors.Join(err, client.Disconnect(ctx))
+	}()
+
+	result, err := client.ListDatabaseNames(ctx, bson.D{{Key: "name", Value: bson.D{{Key: "$regex", Value: "^mirera-review"}}}})
+	if err != nil {
+		return nil, err
+	}
+
+	var dbs []int
+	for _, db := range result {
+		review, err := strconv.Atoi(strings.Split(db, "-")[2])
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(active, review) {
+			dbs = append(dbs, review)
+		}
+	}
+	return dbs, nil
+}
+
 func main() {
-	token, err := ReadAccess("access.json")
+	ctx := context.TODO()
+	token, mongo, err := ReadAccess("access.json")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(token)
+	fmt.Println(token, mongo)
 
 	openMR, err := GetOpen(token)
 	if err != nil {
@@ -131,4 +167,10 @@ func main() {
 		log.Fatal(err)
 	}
 	fmt.Println(k8s_danglings)
+
+	mongo_danglings, err := MongoDanglings(ctx, mongo, openMR)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(mongo_danglings)
 }
