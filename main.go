@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -23,29 +24,41 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-func ReadAccess(filename string) (string, string, error) {
+type Minio struct {
+	Endpoint string `json:"endpoint"`
+	Access   string `json:"access"`
+	Secret   string `json:"secret"`
+}
+
+type Access struct {
+	Gitlab  string `json:"gitlab"`
+	Mongo   string `json:"mongo"`
+	MinioAc Minio  `json:"minio"`
+}
+
+func ReadAccess(filename string) (*Access, error) {
 	ajson, err := os.Open("access.json")
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer ajson.Close()
 
 	data, err := io.ReadAll(ajson)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
-	var result struct {
-		Token string
-		Mongo string
-	}
+	var result Access
 	err = json.Unmarshal(data, &result)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	return result.Token, result.Mongo, nil
+	return &result, nil
 }
 
 func GetOpen(token string) ([]int, error) {
@@ -148,15 +161,44 @@ func MongoDanglings(ctx context.Context, uri string, active []int) ([]int, error
 	return dbs, nil
 }
 
+func MinioDanglings(ctx context.Context, access Minio, active []int) ([]int, error) {
+	useSSL := false
+	client, err := minio.New(access.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(access.Access, access.Secret, ""),
+		Secure: useSSL,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	buckets, err := client.ListBuckets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var dangling []int
+	for _, bucket := range buckets {
+		if regexp.MustCompile(`^mirera-[0-9]+`).MatchString(bucket.Name) {
+			review, err := strconv.Atoi(strings.Split(bucket.Name, "-")[1])
+			if err != nil {
+				return nil, err
+			}
+			if !slices.Contains(active, review) {
+				dangling = append(dangling, review)
+			}
+		}
+	}
+	return dangling, nil
+}
+
 func main() {
 	ctx := context.TODO()
-	token, mongo, err := ReadAccess("access.json")
+	access, err := ReadAccess("access.json")
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(token, mongo)
+	fmt.Println(access)
 
-	openMR, err := GetOpen(token)
+	openMR, err := GetOpen(access.Gitlab)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -168,9 +210,15 @@ func main() {
 	}
 	fmt.Println(k8s_danglings)
 
-	mongo_danglings, err := MongoDanglings(ctx, mongo, openMR)
+	mongo_danglings, err := MongoDanglings(ctx, access.Mongo, openMR)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(mongo_danglings)
+
+	minio_danglings, err := MinioDanglings(ctx, access.MinioAc, openMR)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(minio_danglings)
 }
