@@ -97,9 +97,8 @@ func GetOpen(token string) ([]int, error) {
 	return result, nil
 }
 
-func KubeDanglingRemove(ctx context.Context, clientset *kubernetes.Clientset, review int) error {
-	time.Sleep(time.Second)
-	return nil
+func KubeDanglingRemove(ctx context.Context, clientset *kubernetes.Clientset, ns string) error {
+	return clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{DryRun: []string{"All"}})
 }
 
 func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, active []int) error {
@@ -133,7 +132,7 @@ func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, activ
 				return err
 			}
 			if !slices.Contains(active, review) {
-				if err := KubeDanglingRemove(ctx, clientset, review); err != nil {
+				if err := KubeDanglingRemove(ctx, clientset, ns.Name); err != nil {
 					return err
 				}
 				select {
@@ -148,8 +147,8 @@ func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, activ
 	return nil
 }
 
-func MongoDanglingRemove(ctx context.Context, client *mongo.Client, review int) error {
-	time.Sleep(2 * time.Second)
+func MongoDanglingRemove(ctx context.Context, client *mongo.Client, db string) error {
+	time.Sleep(100 * time.Millisecond)
 	return nil
 }
 
@@ -173,7 +172,7 @@ func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri 
 			return err
 		}
 		if !slices.Contains(active, review) {
-			if err := MongoDanglingRemove(ctx, client, review); err != nil {
+			if err := MongoDanglingRemove(ctx, client, db); err != nil {
 				return err
 			}
 			select {
@@ -187,8 +186,8 @@ func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri 
 	return nil
 }
 
-func MinioDanglingRemove(ctx context.Context, client *minio.Client, review int) error {
-	time.Sleep(3 * time.Second)
+func MinioDanglingRemove(ctx context.Context, client *minio.Client, bucket string) error {
+	time.Sleep(200 * time.Millisecond)
 	return nil
 }
 
@@ -213,7 +212,7 @@ func MinioDanglings(ctx context.Context, dang chan<- int, done chan<- bool, acce
 				return err
 			}
 			if !slices.Contains(active, review) {
-				if err := MinioDanglingRemove(ctx, client, review); err != nil {
+				if err := MinioDanglingRemove(ctx, client, bucket.Name); err != nil {
 					return err
 				}
 				select {
@@ -252,22 +251,16 @@ func main() {
 	minio_danglings := make(chan int)
 	grp.Go(func() error { return MinioDanglings(ctx, minio_danglings, done, access.MinioAc, openMR) })
 
-	type Dang struct {
-		N   int
-		Src string
-	}
-	danglings := make(chan Dang)
 	grp.Go(func() error {
-		defer close(danglings)
 		var d int
 		for n := 3; n > 0; {
 			select {
 			case d = <-k8s_danglings:
-				danglings <- Dang{d, "k8s"}
+				fmt.Println(d, "k8s")
 			case d = <-mongo_danglings:
-				danglings <- Dang{d, "mongo"}
+				fmt.Println(d, "mongo")
 			case d = <-minio_danglings:
-				danglings <- Dang{d, "minio"}
+				fmt.Println(d, "minio")
 			case <-done:
 				n--
 			}
@@ -275,12 +268,6 @@ func main() {
 		return nil
 	})
 
-	grp.Go(func() error {
-		for d := range danglings {
-			fmt.Println(d)
-		}
-		return nil
-	})
 	if err := grp.Wait(); err != nil {
 		log.Fatal(err)
 	}
