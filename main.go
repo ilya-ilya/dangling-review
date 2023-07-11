@@ -41,24 +41,24 @@ type Access struct {
 	MinioAc Minio  `json:"minio"`
 }
 
-func ReadAccess(filename string) (*Access, error) {
+func ReadAccess(filename string) (Access, error) {
 	ajson, err := os.Open("access.json")
 	if err != nil {
-		return nil, err
+		return Access{}, err
 	}
 	defer ajson.Close()
 
 	data, err := io.ReadAll(ajson)
 	if err != nil {
-		return nil, err
+		return Access{}, err
 	}
 
 	var result Access
 	err = json.Unmarshal(data, &result)
 	if err != nil {
-		return nil, err
+		return Access{}, err
 	}
-	return &result, nil
+	return result, nil
 }
 
 func GetOpen(token string) ([]int, error) {
@@ -95,7 +95,7 @@ func GetOpen(token string) ([]int, error) {
 	return result, nil
 }
 
-func KubeDanglings(active []int) ([]int, error) {
+func KubeDanglings(ctx context.Context, active []int) ([]int, error) {
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -115,7 +115,7 @@ func KubeDanglings(active []int) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	namespaces, err := clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func MinioDanglings(ctx context.Context, access Minio, active []int) ([]int, err
 }
 
 func main() {
-	ctx := context.TODO()
+	ctx := context.Background()
 	access, err := ReadAccess("access.json")
 	if err != nil {
 		log.Fatal(err)
@@ -204,7 +204,7 @@ func main() {
 	}
 	fmt.Println(openMR)
 
-	k8s_danglings, err := KubeDanglings(openMR)
+	k8s_danglings, err := KubeDanglings(ctx, openMR)
 	if err != nil {
 		log.Fatal(err)
 	}
