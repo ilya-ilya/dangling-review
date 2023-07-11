@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
@@ -96,6 +97,11 @@ func GetOpen(token string) ([]int, error) {
 	return result, nil
 }
 
+func KubeDanglingRemove(ctx context.Context, clientset *kubernetes.Clientset, review int) error {
+	time.Sleep(time.Second)
+	return nil
+}
+
 func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, active []int) error {
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
@@ -127,6 +133,9 @@ func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, activ
 				return err
 			}
 			if !slices.Contains(active, review) {
+				if err := KubeDanglingRemove(ctx, clientset, review); err != nil {
+					return err
+				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -136,6 +145,11 @@ func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, activ
 		}
 	}
 	done <- true
+	return nil
+}
+
+func MongoDanglingRemove(ctx context.Context, client *mongo.Client, review int) error {
+	time.Sleep(2 * time.Second)
 	return nil
 }
 
@@ -159,6 +173,9 @@ func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri 
 			return err
 		}
 		if !slices.Contains(active, review) {
+			if err := MongoDanglingRemove(ctx, client, review); err != nil {
+				return err
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -167,6 +184,11 @@ func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri 
 		}
 	}
 	done <- true
+	return nil
+}
+
+func MinioDanglingRemove(ctx context.Context, client *minio.Client, review int) error {
+	time.Sleep(3 * time.Second)
 	return nil
 }
 
@@ -191,6 +213,9 @@ func MinioDanglings(ctx context.Context, dang chan<- int, done chan<- bool, acce
 				return err
 			}
 			if !slices.Contains(active, review) {
+				if err := MinioDanglingRemove(ctx, client, review); err != nil {
+					return err
+				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
