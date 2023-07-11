@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"golang.org/x/exp/slices"
+	"golang.org/x/sync/errgroup"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -95,7 +96,7 @@ func GetOpen(token string) ([]int, error) {
 	return result, nil
 }
 
-func KubeDanglings(ctx context.Context, active []int) ([]int, error) {
+func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, active []int) error {
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
 		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
@@ -107,37 +108,41 @@ func KubeDanglings(ctx context.Context, active []int) ([]int, error) {
 	// use the current context in kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	namespaces, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var reviews []int
 	for _, ns := range namespaces.Items {
 		if strings.HasPrefix(ns.Name, "mirera-2-42-review-") {
 			review, err := strconv.Atoi(strings.Split(ns.Name, "-")[4])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if !slices.Contains(active, review) {
-				reviews = append(reviews, review)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case dang <- review:
+				}
 			}
 		}
 	}
-	return reviews, nil
+	done <- true
+	return nil
 }
 
-func MongoDanglings(ctx context.Context, uri string, active []int) ([]int, error) {
+func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri string, active []int) error {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() {
 		err = errors.Join(err, client.Disconnect(ctx))
@@ -145,53 +150,60 @@ func MongoDanglings(ctx context.Context, uri string, active []int) ([]int, error
 
 	result, err := client.ListDatabaseNames(ctx, bson.D{{Key: "name", Value: bson.D{{Key: "$regex", Value: "^mirera-review"}}}})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var dbs []int
 	for _, db := range result {
 		review, err := strconv.Atoi(strings.Split(db, "-")[2])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !slices.Contains(active, review) {
-			dbs = append(dbs, review)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case dang <- review:
+			}
 		}
 	}
-	return dbs, nil
+	done <- true
+	return nil
 }
 
-func MinioDanglings(ctx context.Context, access Minio, active []int) ([]int, error) {
+func MinioDanglings(ctx context.Context, dang chan<- int, done chan<- bool, access Minio, active []int) error {
 	useSSL := false
 	client, err := minio.New(access.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(access.Access, access.Secret, ""),
 		Secure: useSSL,
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	buckets, err := client.ListBuckets(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var dangling []int
 	for _, bucket := range buckets {
 		if regexp.MustCompile(`^mirera-[0-9]+`).MatchString(bucket.Name) {
 			review, err := strconv.Atoi(strings.Split(bucket.Name, "-")[1])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if !slices.Contains(active, review) {
-				dangling = append(dangling, review)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case dang <- review:
+				}
 			}
 		}
 	}
-	return dangling, nil
+	done <- true
+	return nil
 }
 
 func main() {
-	ctx := context.Background()
 	access, err := ReadAccess("access.json")
 	if err != nil {
 		log.Fatal(err)
@@ -204,21 +216,47 @@ func main() {
 	}
 	fmt.Println(openMR)
 
-	k8s_danglings, err := KubeDanglings(ctx, openMR)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(k8s_danglings)
+	grp, ctx := errgroup.WithContext(context.Background())
+	done := make(chan bool)
+	k8s_danglings := make(chan int)
+	grp.Go(func() error { return KubeDanglings(ctx, k8s_danglings, done, openMR) })
 
-	mongo_danglings, err := MongoDanglings(ctx, access.Mongo, openMR)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(mongo_danglings)
+	mongo_danglings := make(chan int)
+	grp.Go(func() error { return MongoDanglings(ctx, mongo_danglings, done, access.Mongo, openMR) })
 
-	minio_danglings, err := MinioDanglings(ctx, access.MinioAc, openMR)
-	if err != nil {
+	minio_danglings := make(chan int)
+	grp.Go(func() error { return MinioDanglings(ctx, minio_danglings, done, access.MinioAc, openMR) })
+
+	type Dang struct {
+		N   int
+		Src string
+	}
+	danglings := make(chan Dang)
+	grp.Go(func() error {
+		defer close(danglings)
+		var d int
+		for n := 3; n > 0; {
+			select {
+			case d = <-k8s_danglings:
+				danglings <- Dang{d, "k8s"}
+			case d = <-mongo_danglings:
+				danglings <- Dang{d, "mongo"}
+			case d = <-minio_danglings:
+				danglings <- Dang{d, "minio"}
+			case <-done:
+				n--
+			}
+		}
+		return nil
+	})
+
+	grp.Go(func() error {
+		for d := range danglings {
+			fmt.Println(d)
+		}
+		return nil
+	})
+	if err := grp.Wait(); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(minio_danglings)
 }
