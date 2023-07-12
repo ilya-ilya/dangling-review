@@ -187,8 +187,16 @@ func MongoDanglings(ctx context.Context, dang chan<- int, done chan<- bool, uri 
 }
 
 func MinioDanglingRemove(ctx context.Context, client *minio.Client, bucket string) error {
-	time.Sleep(200 * time.Millisecond)
-	return nil
+	objectCh := client.ListObjects(ctx, bucket, minio.ListObjectsOptions{})
+	for object := range objectCh {
+		if object.Err != nil {
+			return object.Err
+		}
+		if err := client.RemoveObject(ctx, bucket, object.Key, minio.RemoveObjectOptions{}); err != nil {
+			return err
+		}
+	}
+	return client.RemoveBucket(ctx, bucket)
 }
 
 func MinioDanglings(ctx context.Context, dang chan<- int, done chan<- bool, access Minio, active []int) error {
