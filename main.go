@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
@@ -147,8 +146,10 @@ func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, activ
 	return nil
 }
 
-func MongoDanglingRemove(ctx context.Context, client *mongo.Client, db string) error {
-	time.Sleep(100 * time.Millisecond)
+func MongoDanglingRemove(ctx context.Context, client *mongo.Client, dbName string) error {
+	db := client.Database(dbName)
+	db.Drop(ctx)
+	db.RunCommand(ctx, bson.D{{Key: "dropUser", Value: "mirera"}})
 	return nil
 }
 
