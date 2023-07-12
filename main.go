@@ -98,7 +98,7 @@ func GetOpen(token string) ([]int, error) {
 }
 
 func KubeDanglingRemove(ctx context.Context, clientset *kubernetes.Clientset, ns string) error {
-	return clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{DryRun: []string{"All"}})
+	return clientset.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
 }
 
 func KubeDanglings(ctx context.Context, dang chan<- int, done chan<- bool, active []int) error {
