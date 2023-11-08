@@ -1,0 +1,10 @@
+{
+	"user":"",
+	"gitlab":"",
+	"mongo":"",
+	"minio": {
+		"endpoint":"",
+		"access":"",
+		"secret":""
+	}
+}
